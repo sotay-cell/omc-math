@@ -3,4 +3,3 @@ pandas
 gspread
 oauth2client
 pytz
-google-auth-oauthlib
