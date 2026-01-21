@@ -50,16 +50,16 @@ def fetch_data():
 # --- メイン処理開始 ---
 ws_users, ws_settings, ws_prob = get_connection()
 if not ws_users:
-    st.error("🚨 データベース接続エラー: シート名(users, settings, problems)を確認してください")
+    st.error("🚨 データベース接続エラー")
     st.stop()
 
 st.title("🏆 リアルタイム数学コンテスト Pro")
 
-# データ読み込み（初期）
+# データ読み込み
 users_list, settings_dict = fetch_data()
 
 # ==========================================
-# 👮 管理者メニュー (配置場所を一番上に移動しました！)
+# 👮 管理者メニュー
 # ==========================================
 status = settings_dict.get("status", "待機中")
 active_cid = settings_dict.get("contest_id", "A001")
@@ -72,7 +72,7 @@ with st.sidebar.expander("👮 管理者メニュー"):
         
         # 開催管理
         with tab_c:
-            st.write(f"現在: **{status}** (ID: {active_cid})")
+            st.write(f"Status: **{status}**")
             new_cid = st.text_input("ID設定", value=active_cid)
             min_val = st.number_input("制限時間(分)", value=30)
             c1, c2, c3 = st.columns(3)
@@ -90,11 +90,11 @@ with st.sidebar.expander("👮 管理者メニュー"):
             if c3.button("成績リセット"):
                 users_len = len(users_list)
                 if users_len > 0:
-                    # 2行目から users_len+1 行目までの C, D列を書き換え
+                    # 列が増えたので、D列(4)とE列(5)をリセットします
                     cell_list = []
                     for r in range(2, users_len + 2):
-                        cell_list.append(gspread.Cell(r, 3, 0))  # score
-                        cell_list.append(gspread.Cell(r, 4, "")) # history
+                        cell_list.append(gspread.Cell(r, 4, 0))  # score (D列)
+                        cell_list.append(gspread.Cell(r, 5, "")) # history (E列)
                     ws_users.update_cells(cell_list)
                     fetch_data.clear()
                     st.toast("リセット完了")
@@ -113,10 +113,12 @@ with st.sidebar.expander("👮 管理者メニュー"):
         with tab_u:
             new_uid = st.text_input("新規ID")
             new_upass = st.text_input("新規Pass")
+            new_uname = st.text_input("氏名")
             if st.button("生徒登録"):
-                ws_users.append_row([new_uid, new_upass, 0, ""])
+                # C列に名前が入ります
+                ws_users.append_row([new_uid, new_upass, new_uname, 0, ""])
                 fetch_data.clear()
-                st.success(f"登録完了: {new_uid}")
+                st.success(f"登録完了: {new_uname}")
 
 # ==========================================
 # 🔐 ログイン処理
@@ -124,9 +126,11 @@ with st.sidebar.expander("👮 管理者メニュー"):
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["my_id"] = ""
+    st.session_state["my_name"] = "" # 名前も覚える
 
-# ログアウトボタン
 if st.session_state["logged_in"]:
+    # サイドバーに名前を表示
+    st.sidebar.markdown(f"👤 **{st.session_state['my_name']}** さん")
     if st.sidebar.button("ログアウト"):
         st.session_state["logged_in"] = False
         st.rerun()
@@ -140,33 +144,36 @@ if not st.session_state["logged_in"]:
         submitted = st.form_submit_button("ログイン")
         
         if submitted:
-            # 最新データ取得
             fresh_users = ws_users.get_all_records()
             user_found = False
+            found_name = ""
+            
             for u in fresh_users:
-                # 文字列にして比較（数値ID対策）
                 if str(u.get('user_id')) == str(input_id) and str(u.get('password')) == str(input_pass):
                     st.session_state["logged_in"] = True
                     st.session_state["my_id"] = str(input_id)
+                    # 名前を取得（なければIDで代用）
+                    found_name = u.get('name') or str(input_id)
+                    st.session_state["my_name"] = found_name
                     user_found = True
                     break
             
             if user_found:
-                st.success(f"ログイン成功！ {input_id}")
+                st.success(f"ようこそ、{found_name} さん！")
                 time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("IDまたはパスワードが違います")
-    
-    st.stop() # ログインしていないとここで止まる
+    st.stop()
 
 # ==========================================
-# 🎮 メイン画面（ログイン後）
+# 🎮 メイン画面
 # ==========================================
 my_id = st.session_state["my_id"]
+my_name = st.session_state["my_name"]
 df_users = pd.DataFrame(users_list)
 
-# 自分のデータ取得（エラー対策済み）
+# 自分のデータ取得
 my_score = 0
 my_solved = []
 
@@ -175,26 +182,18 @@ if not df_users.empty and 'user_id' in df_users.columns:
     my_row = df_users[df_users['user_id'] == my_id]
     
     if not my_row.empty:
-        # --- ここが修正ポイント！ ---
         raw_score = my_row.iloc[0]['score']
-        try:
-            # 空欄や文字が入っていても0点にする
-            my_score = int(raw_score)
-        except:
-            my_score = 0
-        # -------------------------
+        try: my_score = int(raw_score)
+        except: my_score = 0
         
         raw_hist = my_row.iloc[0]['history']
-        # historyがNaN（空）の場合の対策
-        if pd.isna(raw_hist) or raw_hist == "":
-            my_solved = []
-        else:
-            my_solved = str(raw_hist).split(',')
+        if pd.isna(raw_hist) or raw_hist == "": my_solved = []
+        else: my_solved = str(raw_hist).split(',')
     else:
-        st.error("IDが見つかりません。")
+        st.error("データエラー")
         st.stop()
 
-# タイマー計算
+# タイマー
 remaining_msg, is_time_up = "", False
 if status == "開催中" and end_time_str:
     try:
@@ -207,7 +206,7 @@ if status == "開催中" and end_time_str:
             remaining_msg, is_time_up = "⏱ タイムアップ！", True
     except: pass
 
-# 問題データ取得
+# 問題取得
 try:
     prob_data = ws_prob.get_all_records()
     df_prob = pd.DataFrame(prob_data)
@@ -217,25 +216,30 @@ try:
     else: current_problems = pd.DataFrame()
 except: current_problems = pd.DataFrame()
 
-# 正解者数カウント
+# 正解者数
 solver_counts = {}
 if 'history' in df_users.columns:
     for h in df_users['history']:
-        # NaN対策
         if pd.isna(h) or h == "": continue
         for i in str(h).split(','): 
             if i: solver_counts[i] = solver_counts.get(i, 0) + 1
 
-# 自動更新ランキング
+# 自動更新ランキング（名前表示に対応）
 @st.fragment(run_every=5)
 def show_ranking():
     st.write("### 🏆 Standings")
     u, _ = fetch_data()
     df = pd.DataFrame(u)
     if not df.empty:
-        # スコアを数値化（エラー値は0にする）
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0)
-        view = df[['user_id', 'score']].sort_values('score', ascending=False).reset_index(drop=True)
+        # IDではなく名前(name)を表示、なければID
+        if 'name' in df.columns:
+            df['display_name'] = df['name'].where(df['name'] != "", df['user_id'])
+        else:
+            df['display_name'] = df['user_id']
+            
+        view = df[['display_name', 'score']].sort_values('score', ascending=False).reset_index(drop=True)
+        view.columns = ['Name', 'Score'] # 列名をきれいに
         view.index += 1
         st.dataframe(view, use_container_width=True)
 
@@ -252,7 +256,7 @@ if status == "開催中":
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        st.metric(f"My Score ({my_id})", my_score)
+        st.metric(f"{my_name} さんのスコア", my_score)
         if st.button("手動更新"): st.rerun()
         
         if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
@@ -275,23 +279,17 @@ if status == "開催中":
                             ans = st.text_input("回答", key=f"ans_{uid}")
                             if st.button("送信", key=f"btn_{uid}"):
                                 if str(ans).strip() == str(row['ans']):
-                                    # 正解処理
                                     try:
                                         cell = ws_users.find(my_id)
-                                        # 安全に数値取得
-                                        try:
-                                            cur_s = int(ws_users.cell(cell.row, 3).value)
-                                        except:
-                                            cur_s = 0
-                                            
-                                        cur_h_val = ws_users.cell(cell.row, 4).value
-                                        if cur_h_val:
-                                            new_h = cur_h_val + "," + uid
-                                        else:
-                                            new_h = uid
+                                        # 列番号が変わったので修正（Score=4, History=5）
+                                        try: cur_s = int(ws_users.cell(cell.row, 4).value)
+                                        except: cur_s = 0
                                         
-                                        ws_users.update_cell(cell.row, 3, cur_s + row['pt'])
-                                        ws_users.update_cell(cell.row, 4, new_h)
+                                        cur_h = ws_users.cell(cell.row, 5).value
+                                        new_h = (cur_h + "," + uid) if cur_h else uid
+                                        
+                                        ws_users.update_cell(cell.row, 4, cur_s + row['pt'])
+                                        ws_users.update_cell(cell.row, 5, new_h)
                                         
                                         fetch_data.clear()
                                         st.toast("正解！")
