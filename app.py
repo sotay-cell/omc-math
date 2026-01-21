@@ -281,7 +281,7 @@ if 'history' in df_users.columns:
 
 # 順位表表示
 def show_ranking():
-    st.write("## Standings")
+    st.write("#### Standings")
     df = pd.DataFrame(users_list)
     if not df.empty:
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0)
