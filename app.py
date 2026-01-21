@@ -180,4 +180,5 @@ elif status == "開催中":
                     st.markdown(row['q'])
                     
                     if is_time_up: st.write("🚫 終了")
-                    elif lock_rem >
+                    elif lock_rem > 0: st.error(f"❌ WA: あと{int(lock_rem)}秒")
+                    else:
