@@ -6,98 +6,45 @@ import time
 import json
 import datetime
 import pytz
-import requests
-import urllib.parse
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Math Contest DX", layout="wide")
 JST = pytz.timezone('Asia/Tokyo')
 
-# --- 0. 認証機能 (OAuth) ---
-def google_login():
-    """Googleログインを行い、メールアドレスと名前を返す"""
-    # Secretsから設定取得
-    try:
-        client_id = st.secrets["oauth"]["client_id"]
-        client_secret = st.secrets["oauth"]["client_secret"]
-        redirect_uri = st.secrets["oauth"]["redirect_uri"]
-    except:
-        st.error("Secretsに [oauth] 設定がありません。")
-        return None, None
+# ==========================================
+# 🔑 設定：クラスの合言葉（ここを変えてください）
+CLASS_PASSWORD = "math" 
+# ==========================================
 
-    # URLパラメータに 'code' があるか確認（Googleからの戻り）
-    auth_code = st.query_params.get("code")
+# --- 1. 認証チェック機能 ---
+def check_password():
+    """合言葉による簡易認証"""
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
 
-    if auth_code:
-        # 2回目以降の自動リロード対策（コードを消費したら消す）
-        st.query_params.clear()
+    if not st.session_state["authenticated"]:
+        # ログイン画面を表示
+        st.markdown(f"""
+            <div style="text-align:center; margin-top: 50px;">
+                <h1>🔒 クラスルーム認証</h1>
+                <p>先生から伝えられた合言葉を入力してください</p>
+            </div>
+        """, unsafe_allow_html=True)
         
-        # 1. 認可コードをトークンに交換
-        token_url = "https://oauth2.googleapis.com/token"
-        data = {
-            "code": auth_code,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-            "grant_type": "authorization_code",
-        }
-        r = requests.post(token_url, data=data)
-        if r.status_code != 200:
-            st.error("ログイン失敗: トークン交換エラー")
-            return None, None
-        
-        token_info = r.json()
-        access_token = token_info.get("access_token")
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            input_pass = st.text_input("合言葉", type="password", key="pass_input")
+            if st.button("入室する", use_container_width=True):
+                if input_pass == CLASS_PASSWORD:
+                    st.session_state["authenticated"] = True
+                    st.success("認証成功！")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("合言葉が違います")
+        st.stop() # ここでプログラムを止める
 
-        # 2. ユーザー情報を取得
-        user_url = "https://www.googleapis.com/oauth2/v1/userinfo"
-        headers = {"Authorization": f"Bearer {access_token}"}
-        user_r = requests.get(user_url, headers=headers)
-        if user_r.status_code != 200:
-            st.error("ユーザー情報取得エラー")
-            return None, None
-            
-        user_data = user_r.json()
-        email = user_data.get("email")
-        name = user_data.get("name")
-        
-        # セッションに保存
-        st.session_state["user_email"] = email
-        st.session_state["user_name"] = name
-        st.rerun() # 再読み込みして画面切り替え
-
-    # ログイン済みなら情報を返す
-    if "user_email" in st.session_state:
-        return st.session_state["user_email"], st.session_state["user_name"]
-
-    # まだならログインURLを生成してリンクを表示
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "email profile",
-        "access_type": "online",
-    }
-    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
-    
-    st.markdown(f"""
-        <div style="text-align:center; margin-top: 50px;">
-            <h1>🏆 Math Contest Login</h1>
-            <p>参加するにはGoogleアカウントでログインしてください</p>
-            <a href="{auth_url}" target="_self">
-                <button style="
-                    background-color: #4285F4; color: white; border: none; 
-                    padding: 12px 24px; font-size: 16px; border-radius: 5px; cursor: pointer;
-                    display: flex; align-items: center; margin: 0 auto; gap: 10px;">
-                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" width="20">
-                    Googleでログイン
-                </button>
-            </a>
-        </div>
-    """, unsafe_allow_html=True)
-    return None, None
-
-# --- 1. データベース接続 ---
+# --- 2. データベース接続 ---
 @st.cache_resource
 def get_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -112,43 +59,30 @@ def get_connection():
         try: ws_prob = sh.worksheet("problems")
         except: ws_prob = sh.add_worksheet(title="problems", rows="100", cols="20")
         return sh.sheet1, ws_prob
-    except: return None, None
+    except Exception as e: return None, None
 
 @st.cache_data(ttl=5)
 def fetch_ranking_data():
     sheet_rank, _ = get_connection()
     return sheet_rank.get_all_records() if sheet_rank else []
 
-# --- 実行開始 ---
-# まずログインチェック
-user_email, user_name = google_login()
+# === メイン処理開始 ===
 
-# ログインしていない場合はここでストップ（画面にはログインボタンのみ表示）
-if not user_email:
-    st.stop()
+# 1. まず合言葉チェック
+check_password()
 
-# --- 以下、ログイン後の世界 ---
+# 2. 合言葉が合っていたら、いつものアプリを表示
+st.title("🏆 リアルタイム数学コンテスト DX")
+
 sheet_rank, sheet_prob = get_connection()
 if sheet_rank is None:
-    st.error("DB接続エラー")
+    st.error("🚨 接続エラー: Secretsの設定を確認してください")
     st.stop()
 
-# サイドバーにユーザー情報表示
-with st.sidebar:
-    st.write(f"👤 **{user_name}**")
-    st.caption(f"{user_email}")
-    if st.button("ログアウト"):
-        st.session_state.clear()
-        st.rerun()
-
-# --- 2. 管理パネル ---
-admin_mode = False
-# 特定のメールアドレスだけを管理者にしたい場合はここで判定可能
-# 例: if user_email == "teacher@school.ed.jp":
+# --- 管理者メニュー ---
 with st.sidebar.expander("👮 管理者メニュー"):
     admin_pass = st.text_input("パスワード", type="password")
     if admin_pass == "admin123":
-        admin_mode = True
         st.success("認証成功")
         tab_ctrl, tab_make = st.tabs(["🎮 開催操作", "📝 問題作成"])
         
@@ -187,7 +121,7 @@ with st.sidebar.expander("👮 管理者メニュー"):
                 sheet_prob.append_row([in_cid, in_no, in_q, in_ans, in_pt])
                 st.success("追加しました")
 
-# --- 3. データ読み込み ---
+# --- データ読み込み ---
 try:
     vals = sheet_rank.get('D1:F1')
     status = vals[0][0] if vals and len(vals[0])>0 else "待機中"
@@ -217,9 +151,15 @@ try:
     else: current_problems = pd.DataFrame()
 except: current_problems = pd.DataFrame()
 
-# --- 4. ユーザーデータ処理 ---
-# ログイン名(user_name)をそのまま使う
+# --- ユーザー処理 ---
 if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
+
+# 合言葉突破後に名前を入力させる
+st.info("👋 ニックネームを入力してコンテストに参加してください")
+user_name = st.text_input("ニックネーム", key="login_name")
+
+if not user_name:
+    if not admin_pass: st.stop() # 名前がないとここで止まる
 
 raw_rank_data = fetch_ranking_data()
 df_rank = pd.DataFrame(raw_rank_data)
@@ -231,9 +171,10 @@ if not df_rank.empty and user_name in df_rank['user'].values:
     solved = str(row['solved_history']).split(',') if str(row['solved_history']) else []
 else:
     if status != "待機中":
-        # Google名を登録
         sheet_rank.append_row([user_name, 0, "", ""])
         fetch_ranking_data.clear()
+        st.toast(f"Welcome {user_name}!")
+        time.sleep(0.5)
         st.rerun()
 
 solver_counts = {}
@@ -253,9 +194,7 @@ def auto_ranking_table():
         st.dataframe(view_df, use_container_width=True)
     else: st.write("データなし")
 
-st.title("🏆 リアルタイム数学コンテスト DX")
-
-# --- 5. メイン画面 ---
+# --- メイン画面 ---
 if status == "開催中":
     if is_time_up: st.error("⏰ 終了！")
     else: st.info(f"🔥 開催中 | {remaining_msg}")
