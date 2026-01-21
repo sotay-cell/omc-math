@@ -149,6 +149,7 @@ if "logged_in" not in st.session_state:
     st.session_state["my_id"] = ""
     st.session_state["my_name"] = ""
     st.session_state["last_known_status"] = status
+    st.session_state["last_known_time_up"] = False # 終了判定用
 
 if st.session_state["logged_in"]:
     st.sidebar.markdown(f"👤 **{st.session_state['my_name']}** さん")
@@ -184,17 +185,41 @@ if not st.session_state["logged_in"]:
 
 
 # ==========================================
-# ★開始監視システム
+# ★開始 & 終了 監視システム
 # ==========================================
 @st.fragment(run_every=3) # 3秒おきにチェック
 def trigger_observer():
-    # コンテストの開始だけを監視して自動リロード
+    # データの最新状態をチェック
     _, s_data, _ = fetch_data()
     
+    # 1. コンテスト開始/ステータス変化の監視
     new_status = s_data.get("status", "待機中")
     if st.session_state.get("last_known_status") != new_status:
         st.session_state["last_known_status"] = new_status
-        st.rerun() 
+        st.rerun()
+    
+    # 2. 終了時刻の監視（タイムアップの瞬間を検知）
+    if new_status == "開催中":
+        end_str = s_data.get("end_time", "")
+        if end_str:
+            try:
+                # 終了時刻を解析
+                et = datetime.datetime.strptime(end_str, '%Y-%m-%d %H:%M:%S')
+                et = JST.localize(et)
+                now = datetime.datetime.now(JST)
+                
+                # 今、タイムアップしているか？
+                is_up = (now >= et)
+                
+                # 前回の状態と比較して、変化したらリロード
+                # (これで終了した瞬間に1回だけリロードがかかる)
+                last_is_up = st.session_state.get("last_known_time_up", False)
+                
+                if is_up != last_is_up:
+                    st.session_state["last_known_time_up"] = is_up
+                    st.rerun()
+            except:
+                pass
 
 trigger_observer()
 
@@ -224,7 +249,7 @@ if not df_users.empty and 'user_id' in df_users.columns:
         st.error("データエラー")
         st.stop()
 
-# タイマー
+# タイマー & タイムアップ判定
 remaining_msg, is_time_up = "", False
 if status == "開催中" and end_time_str:
     try:
@@ -235,6 +260,8 @@ if status == "開催中" and end_time_str:
             remaining_msg = f"⏱ 残り: {mm}分 {ss}秒"
         else:
             remaining_msg, is_time_up = "⏱ タイムアップ！", True
+            # セッションステートも更新しておく（整合性のため）
+            st.session_state["last_known_time_up"] = True
     except: pass
 
 # 問題フィルタリング
@@ -321,11 +348,11 @@ if status == "開催中":
                             else:
                                 # --- 不正解（ペナルティ）の処理 ---
                                 try:
-                                    # ★配点の1/10を計算（整数にする）
+                                    # ★配点の1/10を減点
                                     penalty = int(row['pt'] / 10)
                                     new_score = my_score - penalty
                                     
-                                    # DBの点数セル(D列=4列目)だけ更新
+                                    # DB更新
                                     cell = ws_users.find(my_id, in_column=1)
                                     ws_users.update_cell(cell.row, 4, new_score)
                                     
