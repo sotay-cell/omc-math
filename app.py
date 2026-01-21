@@ -6,16 +6,100 @@ import time
 import json
 import datetime
 import pytz
+import requests
+import urllib.parse
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Math Contest DX", layout="wide")
 JST = pytz.timezone('Asia/Tokyo')
 
-# --- 1. データベース接続とキャッシュ設定 ---
+# --- 0. 認証機能 (OAuth) ---
+def google_login():
+    """Googleログインを行い、メールアドレスと名前を返す"""
+    # Secretsから設定取得
+    try:
+        client_id = st.secrets["oauth"]["client_id"]
+        client_secret = st.secrets["oauth"]["client_secret"]
+        redirect_uri = st.secrets["oauth"]["redirect_uri"]
+    except:
+        st.error("Secretsに [oauth] 設定がありません。")
+        return None, None
 
+    # URLパラメータに 'code' があるか確認（Googleからの戻り）
+    auth_code = st.query_params.get("code")
+
+    if auth_code:
+        # 2回目以降の自動リロード対策（コードを消費したら消す）
+        st.query_params.clear()
+        
+        # 1. 認可コードをトークンに交換
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code": auth_code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }
+        r = requests.post(token_url, data=data)
+        if r.status_code != 200:
+            st.error("ログイン失敗: トークン交換エラー")
+            return None, None
+        
+        token_info = r.json()
+        access_token = token_info.get("access_token")
+
+        # 2. ユーザー情報を取得
+        user_url = "https://www.googleapis.com/oauth2/v1/userinfo"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        user_r = requests.get(user_url, headers=headers)
+        if user_r.status_code != 200:
+            st.error("ユーザー情報取得エラー")
+            return None, None
+            
+        user_data = user_r.json()
+        email = user_data.get("email")
+        name = user_data.get("name")
+        
+        # セッションに保存
+        st.session_state["user_email"] = email
+        st.session_state["user_name"] = name
+        st.rerun() # 再読み込みして画面切り替え
+
+    # ログイン済みなら情報を返す
+    if "user_email" in st.session_state:
+        return st.session_state["user_email"], st.session_state["user_name"]
+
+    # まだならログインURLを生成してリンクを表示
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "email profile",
+        "access_type": "online",
+    }
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
+    
+    st.markdown(f"""
+        <div style="text-align:center; margin-top: 50px;">
+            <h1>🏆 Math Contest Login</h1>
+            <p>参加するにはGoogleアカウントでログインしてください</p>
+            <a href="{auth_url}" target="_self">
+                <button style="
+                    background-color: #4285F4; color: white; border: none; 
+                    padding: 12px 24px; font-size: 16px; border-radius: 5px; cursor: pointer;
+                    display: flex; align-items: center; margin: 0 auto; gap: 10px;">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/53/Google_%22G%22_Logo.svg" width="20">
+                    Googleでログイン
+                </button>
+            </a>
+        </div>
+    """, unsafe_allow_html=True)
+    return None, None
+
+# --- 1. データベース接続 ---
 @st.cache_resource
 def get_connection():
-    """スプレッドシートへの接続を確立する（リソースキャッシュ）"""
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
         if "gcp_service_account" in st.secrets:
@@ -28,28 +112,43 @@ def get_connection():
         try: ws_prob = sh.worksheet("problems")
         except: ws_prob = sh.add_worksheet(title="problems", rows="100", cols="20")
         return sh.sheet1, ws_prob
-    except Exception as e: return None, None
+    except: return None, None
 
 @st.cache_data(ttl=5)
 def fetch_ranking_data():
-    """ランキングデータを取得し、5秒間キャッシュする（API制限対策）"""
     sheet_rank, _ = get_connection()
-    if sheet_rank:
-        return sheet_rank.get_all_records()
-    return []
+    return sheet_rank.get_all_records() if sheet_rank else []
 
-# 接続チェック
-sheet_rank, sheet_prob = get_connection()
-if sheet_rank is None:
-    st.error("🚨 接続エラー: Secretsの設定を確認してください。")
+# --- 実行開始 ---
+# まずログインチェック
+user_email, user_name = google_login()
+
+# ログインしていない場合はここでストップ（画面にはログインボタンのみ表示）
+if not user_email:
     st.stop()
 
-st.title("🏆 リアルタイム数学コンテスト DX")
+# --- 以下、ログイン後の世界 ---
+sheet_rank, sheet_prob = get_connection()
+if sheet_rank is None:
+    st.error("DB接続エラー")
+    st.stop()
+
+# サイドバーにユーザー情報表示
+with st.sidebar:
+    st.write(f"👤 **{user_name}**")
+    st.caption(f"{user_email}")
+    if st.button("ログアウト"):
+        st.session_state.clear()
+        st.rerun()
 
 # --- 2. 管理パネル ---
+admin_mode = False
+# 特定のメールアドレスだけを管理者にしたい場合はここで判定可能
+# 例: if user_email == "teacher@school.ed.jp":
 with st.sidebar.expander("👮 管理者メニュー"):
     admin_pass = st.text_input("パスワード", type="password")
     if admin_pass == "admin123":
+        admin_mode = True
         st.success("認証成功")
         tab_ctrl, tab_make = st.tabs(["🎮 開催操作", "📝 問題作成"])
         
@@ -76,19 +175,19 @@ with st.sidebar.expander("👮 管理者メニュー"):
                 st.toast("リセット完了")
 
         with tab_make:
-            st.write("###### 新しい問題を追加")
+            st.write("###### 問題追加")
             in_cid = st.text_input("ID", value=new_cid)
             in_no = st.number_input("No.", min_value=1, value=1)
             in_pt = st.number_input("Pt", step=100, value=100)
             in_ans = st.text_input("正解")
-            in_q = st.text_area("問題文 (LaTeX: $...$)", height=100)
+            in_q = st.text_area("問題文 ($...$)", height=100)
             st.caption("プレビュー:")
             if in_q: st.markdown(in_q)
             if st.button("追加"):
                 sheet_prob.append_row([in_cid, in_no, in_q, in_ans, in_pt])
-                st.success(f"追加: {in_cid}-{in_no}")
+                st.success("追加しました")
 
-# --- 3. データ読み込み（メイン） ---
+# --- 3. データ読み込み ---
 try:
     vals = sheet_rank.get('D1:F1')
     status = vals[0][0] if vals and len(vals[0])>0 else "待機中"
@@ -97,7 +196,6 @@ try:
 except:
     status, active_cid, end_time_str = "待機中", "1", ""
 
-# タイマー
 remaining_msg, is_time_up = "", False
 if status == "開催中" and end_time_str:
     try:
@@ -110,7 +208,6 @@ if status == "開催中" and end_time_str:
             remaining_msg, is_time_up = "⏱ タイムアップ！", True
     except: pass
 
-# 問題取得
 try:
     prob_data = sheet_prob.get_all_records()
     df_prob = pd.DataFrame(prob_data)
@@ -120,14 +217,11 @@ try:
     else: current_problems = pd.DataFrame()
 except: current_problems = pd.DataFrame()
 
-# --- 4. ユーザー処理 ---
+# --- 4. ユーザーデータ処理 ---
+# ログイン名(user_name)をそのまま使う
 if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
-user_name = st.sidebar.text_input("参加者名", key="login")
-if not user_name:
-    if not admin_pass: st.stop()
 
-# 自分のスコア計算用（リアルタイム更新はしない部分）
-raw_rank_data = fetch_ranking_data() # キャッシュから取得
+raw_rank_data = fetch_ranking_data()
 df_rank = pd.DataFrame(raw_rank_data)
 score, solved = 0, []
 
@@ -136,44 +230,38 @@ if not df_rank.empty and user_name in df_rank['user'].values:
     score = int(row['score'])
     solved = str(row['solved_history']).split(',') if str(row['solved_history']) else []
 else:
-    if user_name and status != "待機中":
-        # 新規ユーザー登録は直接シートへ（キャッシュ破棄のため）
+    if status != "待機中":
+        # Google名を登録
         sheet_rank.append_row([user_name, 0, "", ""])
-        fetch_ranking_data.clear() # キャッシュクリア
-        st.toast(f"Welcome {user_name}!")
+        fetch_ranking_data.clear()
         st.rerun()
 
-# 正解者数集計
 solver_counts = {}
 if not df_rank.empty:
     for h in df_rank['solved_history']:
         for i in str(h).split(','): 
             if i: solver_counts[i] = solver_counts.get(i, 0) + 1
 
-# --- 5. 自動更新する順位表パーツ ---
-@st.fragment(run_every=5) # 5秒ごとにここだけ再実行！
+@st.fragment(run_every=5)
 def auto_ranking_table():
     st.write("### 🏆 順位表 (LIVE)")
-    # キャッシュされた最新データを取得
     live_data = fetch_ranking_data()
     df_live = pd.DataFrame(live_data)
-    
     if not df_live.empty:
-        # スコア順ソート
         view_df = df_live[['user', 'score']].sort_values('score', ascending=False).reset_index(drop=True)
         view_df.index += 1
         st.dataframe(view_df, use_container_width=True)
-    else:
-        st.write("データなし")
+    else: st.write("データなし")
 
-# --- 6. メイン画面表示 ---
+st.title("🏆 リアルタイム数学コンテスト DX")
+
+# --- 5. メイン画面 ---
 if status == "開催中":
     if is_time_up: st.error("⏰ 終了！")
     else: st.info(f"🔥 開催中 | {remaining_msg}")
 
 if status == "待機中":
     st.info(f"⏳ 第{active_cid}回: 準備中...")
-    # 待機中も順位表だけは見せる
     auto_ranking_table()
 
 elif status == "開催中":
@@ -182,21 +270,17 @@ elif status == "開催中":
     if c2.button("手動更新"): st.rerun()
     
     col_q, col_r = st.columns([2, 1])
-    
-    # 問題エリア（ここは入力中かもしれないので自動更新しない）
     with col_q:
         if current_problems.empty: st.warning("問題なし")
         for i, row in current_problems.iterrows():
             pid, uid = str(row['id']), f"{active_cid}_{str(row['id'])}"
             solvers = solver_counts.get(uid, 0)
-            
             if uid in solved:
                 st.success(f"✅ Q{pid} クリア！")
             else:
                 lock_rem = st.session_state["wa_lock"].get(uid, 0) - time.time()
                 with st.expander(f"Q{pid} ({row['pt']}点) - 正解: {solvers}人"):
                     st.markdown(row['q'])
-                    
                     if is_time_up: st.write("🚫 終了")
                     elif lock_rem > 0: st.error(f"❌ WA: あと{int(lock_rem)}秒")
                     else:
@@ -211,15 +295,13 @@ elif status == "開催中":
                                     new_h = (cur_h + "," + uid) if cur_h else uid
                                     sheet_rank.update_cell(cell.row, 2, cur_s + row['pt'])
                                     sheet_rank.update_cell(cell.row, 3, new_h)
-                                    fetch_ranking_data.clear() # 即座に反映させるためキャッシュ消去
+                                    fetch_ranking_data.clear()
                                     st.rerun()
                                 except: st.error("通信エラー")
                             else:
                                 st.error("不正解...")
                                 st.session_state["wa_lock"][uid] = time.time() + 10
                                 st.rerun()
-
-    # 順位表エリア（ここに自動更新パーツを配置）
     with col_r:
         auto_ranking_table()
 
