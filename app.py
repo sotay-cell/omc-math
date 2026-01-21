@@ -308,7 +308,7 @@ if status == "開催中":
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        st.metric(f"{st.session_state['my_name']}'s Score", f"{my_score}")
+        st.metric(f"{st.session_state['my_name']}'s Score", f"##### {my_score}")
 
         for i, row in current_problems.iterrows():
             pid = str(row['id'])
