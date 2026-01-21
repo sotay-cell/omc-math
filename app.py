@@ -36,7 +36,7 @@ def get_connection():
         return ws_users, ws_settings, ws_prob
     except Exception as e: return None, None, None
 
-# 監視役のためにキャッシュ時間を短く設定
+# キャッシュ設定
 @st.cache_data(ttl=4) 
 def fetch_data():
     """データ取得用"""
@@ -57,7 +57,7 @@ if not ws_users:
 
 st.title("🏆 リアルタイム数学コンテスト Pro")
 
-# 手動更新ボタン（順位表の更新などはこれで行う）
+# 手動更新ボタン
 if st.button("🔄 画面を更新 (順位表・スコア確認)", type="secondary"):
     fetch_data.clear()
     st.rerun()
@@ -149,8 +149,6 @@ if "logged_in" not in st.session_state:
     st.session_state["my_id"] = ""
     st.session_state["my_name"] = ""
     st.session_state["last_known_status"] = status
-    if "wa_lock" not in st.session_state:
-        st.session_state["wa_lock"] = {}
 
 if st.session_state["logged_in"]:
     st.sidebar.markdown(f"👤 **{st.session_state['my_name']}** さん")
@@ -186,36 +184,18 @@ if not st.session_state["logged_in"]:
 
 
 # ==========================================
-# ★ここが改良点：「必要なときだけ」更新する監視役
+# ★開始監視システム
 # ==========================================
-@st.fragment(run_every=3) # 3秒おきにチェック（画面更新は条件に合うときだけ）
+@st.fragment(run_every=3) # 3秒おきにチェック
 def trigger_observer():
-    # 1. データの最新状態をこっそりチェック
+    # コンテストの開始だけを監視して自動リロード
     _, s_data, _ = fetch_data()
     
-    # --- トリガーA：コンテスト開始 ---
-    # 直前のステータスと違う（待機→開催中など）場合のみリロード
     new_status = s_data.get("status", "待機中")
     if st.session_state.get("last_known_status") != new_status:
         st.session_state["last_known_status"] = new_status
-        st.rerun() # ここでリロード発動！
+        st.rerun() 
 
-    # --- トリガーB：WAロック解除 ---
-    # ロック中のものがあり、かつ時間が過ぎているものがあるかチェック
-    if "wa_lock" in st.session_state and st.session_state["wa_lock"]:
-        now = time.time()
-        should_reload = False
-        for uid, end_time in st.session_state["wa_lock"].items():
-            if end_time < now: # 時間切れ発見
-                should_reload = True
-                break
-        
-        if should_reload:
-            st.rerun() # ここでリロード発動！
-    
-    # ※ 条件に合わなければ何もしない（画面はチラつかない）
-
-# 監視役を配置（画面には何も表示しません）
 trigger_observer()
 
 
@@ -275,7 +255,7 @@ if 'history' in df_users.columns:
 # 順位表表示
 def show_ranking():
     st.write("### 🏆 Standings")
-    df = pd.DataFrame(users_list) # 手動更新時のデータを使用
+    df = pd.DataFrame(users_list)
     if not df.empty:
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0)
         if 'name' in df.columns:
@@ -303,8 +283,6 @@ if status == "開催中":
     with col_main:
         st.metric(f"{st.session_state['my_name']} さんのスコア", f"{my_score} 点")
 
-        if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
-        
         for i, row in current_problems.iterrows():
             pid = str(row['id'])
             uid = f"{active_cid}_{pid}"
@@ -313,46 +291,50 @@ if status == "開催中":
             if uid in my_solved:
                 st.success(f"✅ Q{pid} クリア")
             else:
-                lock = st.session_state["wa_lock"].get(uid, 0) - time.time()
-                
                 with st.expander(f"Q{pid} ({row['pt']}点) - 正解{solvers}人"):
                     st.markdown(row['q'])
                     if not is_time_up:
-                        if lock > 0:
-                            # ロック中
-                            st.error(f"❌ WA: あと{int(lock)}秒 (解除されると自動で入力欄が出ます)")
-                        else:
-                            # ロック解除処理
-                            if uid in st.session_state["wa_lock"]:
-                                st.session_state["wa_lock"].pop(uid, None)
+                        ans = st.text_input("回答", key=f"ans_{uid}")
+                        
+                        if st.button("送信", key=f"btn_{uid}"):
+                            # 答え合わせ
+                            if str(ans).strip() == str(row['ans']):
+                                # --- 正解の処理 ---
+                                try:
+                                    new_score = my_score + row['pt']
+                                    
+                                    if uid not in my_solved:
+                                        new_solved_list = my_solved + [uid]
+                                    else:
+                                        new_solved_list = my_solved
+                                    new_history_str = ",".join(new_solved_list)
 
-                            ans = st.text_input("回答", key=f"ans_{uid}")
-                            
-                            if st.button("送信", key=f"btn_{uid}"):
-                                if str(ans).strip() == str(row['ans']):
-                                    try:
-                                        new_score = my_score + row['pt']
-                                        
-                                        if uid not in my_solved:
-                                            new_solved_list = my_solved + [uid]
-                                        else:
-                                            new_solved_list = my_solved
-                                        new_history_str = ",".join(new_solved_list)
-
-                                        cell = ws_users.find(my_id, in_column=1)
-                                        ws_users.update(f"D{cell.row}:E{cell.row}", [[new_score, new_history_str]])
-                                        
-                                        fetch_data.clear()
-                                        st.toast(f"🎉 正解！ +{row['pt']}点")
-                                        time.sleep(0.5)
-                                        st.rerun()
-
-                                    except Exception as e:
-                                        st.error(f"通信エラー詳細: {e}")
-                                else:
-                                    st.error("不正解")
-                                    st.session_state["wa_lock"][uid] = time.time() + 10
+                                    cell = ws_users.find(my_id, in_column=1)
+                                    ws_users.update(f"D{cell.row}:E{cell.row}", [[new_score, new_history_str]])
+                                    
+                                    fetch_data.clear()
+                                    st.toast(f"🎉 正解！ +{row['pt']}点")
+                                    time.sleep(0.5)
                                     st.rerun()
+                                except Exception as e:
+                                    st.error(f"通信エラー詳細: {e}")
+                            else:
+                                # --- 不正解（ペナルティ）の処理 ---
+                                try:
+                                    # ★配点の1/10を計算（整数にする）
+                                    penalty = int(row['pt'] / 10)
+                                    new_score = my_score - penalty
+                                    
+                                    # DBの点数セル(D列=4列目)だけ更新
+                                    cell = ws_users.find(my_id, in_column=1)
+                                    ws_users.update_cell(cell.row, 4, new_score)
+                                    
+                                    fetch_data.clear()
+                                    st.error(f"❌ 不正解！ -{penalty}点")
+                                    time.sleep(1)
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"通信エラー詳細: {e}")
     with col_rank:
         show_ranking()
 
