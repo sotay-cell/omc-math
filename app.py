@@ -220,8 +220,8 @@ elif status == "開催中":
                         if st.button("送信", key=f"btn_{uid}"):
                             # 判定ロジック
                             if str(ans).strip() == str(row['ans']):
-                                st.balloons()
-                                success_flag = False  # 成功したかどうかのフラグ
+                                # st.balloons() を削除しました
+                                success_flag = False
                                 
                                 try:
                                     cell = sheet_rank.find(user_name)
@@ -230,13 +230,14 @@ elif status == "開催中":
                                     new_h = (cur_h + "," + uid) if cur_h else uid
                                     sheet_rank.update_cell(cell.row, 2, cur_s + row['pt'])
                                     sheet_rank.update_cell(cell.row, 3, new_h)
-                                    success_flag = True # 書き込み成功！
+                                    success_flag = True 
                                 except:
                                     st.error("通信エラー: データ書き込みに失敗しました")
                                 
-                                # tryの外でrerunする（これが修正ポイント！）
                                 if success_flag:
                                     fetch_ranking_data.clear()
+                                    st.toast("正解！") # 風船の代わりに控えめな通知
+                                    time.sleep(0.5)
                                     st.rerun()
                                     
                             else:
