@@ -206,13 +206,13 @@ def auto_monitor_header():
         st.session_state["last_known_status"] = current_status
         st.rerun()
 
-    # 2. WAロックの解除監視（★ここを追加修正）
-    # 「ロック終了時刻」が「現在時刻」を過ぎているものがあれば、画面をリフレッシュする
+    # 2. WAロックの解除監視（★ここが「赤い箱」を自動解除する機能です）
+    # 「ロック終了時刻」が「現在時刻」を過ぎているものがあれば、画面をリロードする
     if "wa_lock" in st.session_state and st.session_state["wa_lock"]:
         now = time.time()
         needs_rerun = False
         for uid, end_time in st.session_state["wa_lock"].items():
-            if end_time < now: # 時間切れのロックを発見
+            if end_time < now: # 時間切れのロックを発見！
                 needs_rerun = True
                 break
         if needs_rerun:
