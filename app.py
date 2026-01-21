@@ -55,10 +55,10 @@ if not ws_users:
     st.error("🚨 データベース接続エラー: シート名を確認してください")
     st.stop()
 
-st.title("🏆 リアルタイム数学コンテスト Pro")
+st.title("Otemon Math Contest")
 
 # 手動更新ボタン
-if st.button("🔄 画面を更新 (順位表・スコア確認)", type="secondary"):
+if st.button("更新", type="secondary"):
     fetch_data.clear()
     st.rerun()
 
@@ -76,7 +76,7 @@ existing_cids = sorted(list(set([str(p['contest_id']) for p in prob_list if 'con
 if active_cid not in existing_cids:
     existing_cids.append(active_cid)
 
-with st.sidebar.expander("👮 管理者メニュー"):
+with st.sidebar.expander("管理者メニュー"):
     admin_pass = st.text_input("Admin Pass", type="password")
     if admin_pass == "admin123":
         tab_c, tab_m, tab_u = st.tabs(["開催", "作問", "生徒"])
@@ -123,7 +123,7 @@ with st.sidebar.expander("👮 管理者メニュー"):
                 final_make_cid = make_cid_select
             st.divider()
             in_no = st.number_input("問題番号", value=1)
-            in_q = st.text_area("問題文 (TeX対応)", height=60)
+            in_q = st.text_area("問題文", height=60)
             in_a = st.text_input("正解")
             in_p = st.number_input("配点", value=100)
             if st.button("データベースに追加"):
@@ -158,9 +158,9 @@ if st.session_state["logged_in"]:
         st.rerun()
 
 if not st.session_state["logged_in"]:
-    st.markdown("##### 🔐 生徒ログイン")
+    st.markdown("##### ログイン")
     with st.form("login_form"):
-        input_id = st.text_input("ユーザーID")
+        input_id = st.text_input("User ID")
         input_pass = st.text_input("パスワード", type="password")
         submitted = st.form_submit_button("ログイン")
         if submitted:
@@ -176,7 +176,7 @@ if not st.session_state["logged_in"]:
                     user_found = True
                     break
             if user_found:
-                st.success(f"ようこそ、{found_name} さん！")
+                st.success(f"ようこそ，{found_name} さん")
                 time.sleep(0.5)
                 st.rerun()
             else:
@@ -257,9 +257,9 @@ if status == "開催中" and end_time_str:
         diff = end_dt - datetime.datetime.now(JST)
         if diff.total_seconds() > 0:
             mm, ss = divmod(int(diff.total_seconds()), 60)
-            remaining_msg = f"⏱ 残り: {mm}分 {ss}秒"
+            remaining_msg = f"⏱ 残り: {mm}分"
         else:
-            remaining_msg, is_time_up = "⏱ タイムアップ！", True
+            remaining_msg, is_time_up = "コンテストは終了しました", True
             # セッションステートも更新しておく（整合性のため）
             st.session_state["last_known_time_up"] = True
     except: pass
@@ -296,19 +296,19 @@ def show_ranking():
 
 # 画面表示分け
 if status == "開催中":
-    st.info(f"🔥 {active_cid} 開催中 | {remaining_msg}")
+    st.info(f"{active_cid} 開催中 ｜ {remaining_msg}")
 elif status == "待機中":
     st.info("⏳ 待機中... (開始されると自動で切り替わります)")
     show_ranking()
 
 # 開催中のメイン処理
 if status == "開催中":
-    if is_time_up: st.error("⏰ 終了")
+    if is_time_up: st.error("終了")
     
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        st.metric(f"{st.session_state['my_name']} さんのスコア", f"{my_score} 点")
+        st.metric(f"{st.session_state['my_name']}'s Score", f"{my_score}")
 
         for i, row in current_problems.iterrows():
             pid = str(row['id'])
@@ -316,12 +316,12 @@ if status == "開催中":
             solvers = solver_counts.get(uid, 0)
             
             if uid in my_solved:
-                st.success(f"✅ Q{pid} クリア")
+                st.success(f"✅ 問題{pid} クリア")
             else:
-                with st.expander(f"Q{pid} ({row['pt']}点) - 正解{solvers}人"):
+                with st.expander(f"問題{pid} ({row['pt']}) - 正解 {solvers}人"):
                     st.markdown(row['q'])
                     if not is_time_up:
-                        ans = st.text_input("回答", key=f"ans_{uid}")
+                        ans = st.text_input("解答", key=f"ans_{uid}")
                         
                         if st.button("送信", key=f"btn_{uid}"):
                             # 答え合わせ
@@ -340,7 +340,7 @@ if status == "開催中":
                                     ws_users.update(f"D{cell.row}:E{cell.row}", [[new_score, new_history_str]])
                                     
                                     fetch_data.clear()
-                                    st.toast(f"🎉 正解！ +{row['pt']}点")
+                                    st.toast(f"正解 +{row['pt']}")
                                     time.sleep(0.5)
                                     st.rerun()
                                 except Exception as e:
@@ -357,7 +357,7 @@ if status == "開催中":
                                     ws_users.update_cell(cell.row, 4, new_score)
                                     
                                     fetch_data.clear()
-                                    st.error(f"❌ 不正解！ -{penalty}点")
+                                    st.error(f"不正解 -{penalty}")
                                     time.sleep(1)
                                     st.rerun()
                                 except Exception as e:
