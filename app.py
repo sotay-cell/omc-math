@@ -318,7 +318,7 @@ if status == "開催中":
             if uid in my_solved:
                 st.success(f"✅ 問題{pid} クリア")
             else:
-                with st.expander(f"問題{pid} ({row['pt']}) - 正解 {solvers}人"):
+                with st.expander(f"問題{pid} ({row['pt']}) - 正解  {solvers}人"):
                     st.markdown(row['q'])
                     if not is_time_up:
                         ans = st.text_input("解答", key=f"ans_{uid}")
