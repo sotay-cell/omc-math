@@ -36,7 +36,7 @@ def get_connection():
         return ws_users, ws_settings, ws_prob
     except Exception as e: return None, None, None
 
-# キャッシュを4秒に設定（5秒の自動更新より少し短くして、常に新しいデータを拾えるようにする）
+# キャッシュ設定
 @st.cache_data(ttl=4)
 def fetch_data():
     """データ取得用"""
@@ -152,8 +152,10 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["my_id"] = ""
     st.session_state["my_name"] = ""
-    # ★追加：ステータス変化検知用
     st.session_state["last_known_status"] = status
+    # WAロック情報の初期化
+    if "wa_lock" not in st.session_state:
+        st.session_state["wa_lock"] = {}
 
 if st.session_state["logged_in"]:
     st.sidebar.markdown(f"👤 **{st.session_state['my_name']}** さん")
@@ -193,7 +195,6 @@ if not st.session_state["logged_in"]:
 # ==========================================
 # ★ここが重要：自動更新 & 監視システム
 # ==========================================
-# 5秒おきにここだけ実行して、状態変化やスコア更新をチェック
 @st.fragment(run_every=5)
 def auto_monitor_header():
     # 最新データを取得
@@ -201,17 +202,26 @@ def auto_monitor_header():
     
     # 1. 開催状態の監視（待機→開始の検知）
     current_status = s_data.get("status", "待機中")
-    
-    # 前回の状態と違っていたら（例: 待機中 -> 開催中）、画面全体をリロード
     if st.session_state.get("last_known_status") != current_status:
         st.session_state["last_known_status"] = current_status
         st.rerun()
+
+    # 2. WAロックの解除監視（★ここを追加修正）
+    # 「ロック終了時刻」が「現在時刻」を過ぎているものがあれば、画面をリフレッシュする
+    if "wa_lock" in st.session_state and st.session_state["wa_lock"]:
+        now = time.time()
+        needs_rerun = False
+        for uid, end_time in st.session_state["wa_lock"].items():
+            if end_time < now: # 時間切れのロックを発見
+                needs_rerun = True
+                break
+        if needs_rerun:
+            st.rerun() # リロードしてフォームを復活させる
     
-    # 2. 自分のスコアをリアルタイム表示
+    # 3. 自分のスコアをリアルタイム表示
     my_id_chk = st.session_state["my_id"]
     my_name_chk = st.session_state["my_name"]
     
-    # ユーザーデータから自分を探す
     user_row = next((u for u in u_data if str(u['user_id']) == str(my_id_chk)), None)
     
     display_score = 0
@@ -219,10 +229,8 @@ def auto_monitor_header():
         try: display_score = int(user_row.get('score', 0))
         except: display_score = 0
     
-    # ヘッダーとして表示（これが5秒おきに点滅せずに更新される）
     st.metric(f"{my_name_chk} さんの現在のスコア", f"{display_score} 点")
 
-# ★この関数を配置（ログイン後のみ表示）
 auto_monitor_header()
 
 
@@ -281,10 +289,10 @@ if 'history' in df_users.columns:
             if i: solver_counts[i] = solver_counts.get(i, 0) + 1
 
 # ランキング表示関数
-@st.fragment(run_every=10) # ランキングは少し遅くてもいいので10秒間隔で負荷軽減
+@st.fragment(run_every=10)
 def show_ranking():
     st.write("### 🏆 Standings")
-    u, _, _ = fetch_data() # 最新データを再取得
+    u, _, _ = fetch_data()
     df = pd.DataFrame(u)
     if not df.empty:
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0)
@@ -311,6 +319,7 @@ if status == "開催中":
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
+        # WAロック辞書の初期化確認
         if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
         
         for i, row in current_problems.iterrows():
@@ -328,40 +337,37 @@ if status == "開催中":
                         if lock > 0:
                             st.error(f"❌ WA: あと{int(lock)}秒")
                         else:
+                            # ★ここも修正：ロック時間が過ぎていたら、ロック情報を完全に削除する
+                            # (そうしないと、無限にリロードされ続けるため)
+                            if uid in st.session_state["wa_lock"]:
+                                st.session_state["wa_lock"].pop(uid, None)
+
                             ans = st.text_input("回答", key=f"ans_{uid}")
                             
-                            # ★通信量削減のために改良した回答ボタン
                             if st.button("送信", key=f"btn_{uid}"):
                                 if str(ans).strip() == str(row['ans']):
                                     try:
-                                        # 1. API通信をせず、手元のデータで新しいスコアを計算
                                         new_score = my_score + row['pt']
                                         
-                                        # 履歴の更新用文字列を作成
                                         if uid not in my_solved:
                                             new_solved_list = my_solved + [uid]
                                         else:
                                             new_solved_list = my_solved
                                         new_history_str = ",".join(new_solved_list)
 
-                                        # 2. 書き込み場所を探す(API通信:1回目)
                                         cell = ws_users.find(my_id, in_column=1)
-                                        
-                                        # 3. 点数(D列)と履歴(E列)を一度に書き込む(API通信:2回目)
-                                        # update記法: range="D行:E行", values=[[点数, 履歴]]
                                         ws_users.update(f"D{cell.row}:E{cell.row}", [[new_score, new_history_str]])
                                         
-                                        # キャッシュクリアとリロード
                                         fetch_data.clear()
                                         st.toast(f"🎉 正解！ +{row['pt']}点")
                                         time.sleep(0.5)
                                         st.rerun()
 
                                     except Exception as e:
-                                        # 詳細なエラーを表示
                                         st.error(f"通信エラー詳細: {e}")
                                 else:
                                     st.error("不正解")
+                                    # ここでロック時間をセット
                                     st.session_state["wa_lock"][uid] = time.time() + 10
                                     st.rerun()
     with col_rank:
