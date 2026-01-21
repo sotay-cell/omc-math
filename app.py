@@ -114,7 +114,7 @@ with st.sidebar.expander("管理者メニュー"):
                     fetch_data.clear()
                     st.toast("リセット完了")
 
-        # --- 作問タブ（ここを修正しました） ---
+        # --- 作問タブ（プレビュー修正済み） ---
         with tab_m:
             st.write("###### 問題作成")
             make_cid_select = st.selectbox("コンテストID", options=["(新規作成)"] + existing_cids, index=1 if len(existing_cids)>0 else 0)
@@ -126,13 +126,13 @@ with st.sidebar.expander("管理者メニュー"):
             
             in_no = st.number_input("問題番号", value=1)
             
-            # 問題文入力 (少し高さを広げました)
+            # 問題文入力
             in_q = st.text_area("問題文 (TeX対応: $数式$)", height=100)
             
-            # ★プレビュー機能の追加
+            # ★プレビュー（色なし通常のMarkdown表示）
             st.caption("👇 プレビュー")
             if in_q:
-                st.info(in_q) # ここで実際の表示を確認できます
+                st.markdown(in_q) # ここを st.info から変更しました
             else:
                 st.text("（ここにプレビューが表示されます）")
             
@@ -225,7 +225,6 @@ def trigger_observer():
                 is_up = (now >= et)
                 
                 # 前回の状態と比較して、変化したらリロード
-                # (これで終了した瞬間に1回だけリロードがかかる)
                 last_is_up = st.session_state.get("last_known_time_up", False)
                 
                 if is_up != last_is_up:
@@ -273,7 +272,6 @@ if status == "開催中" and end_time_str:
             remaining_msg = f"残り {mm} 分"
         else:
             remaining_msg, is_time_up = "コンテストは終了しました", True
-            # セッションステートも更新しておく（整合性のため）
             st.session_state["last_known_time_up"] = True
     except: pass
 
