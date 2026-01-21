@@ -114,6 +114,7 @@ with st.sidebar.expander("管理者メニュー"):
                     fetch_data.clear()
                     st.toast("リセット完了")
 
+        # --- 作問タブ（ここを修正しました） ---
         with tab_m:
             st.write("###### 問題作成")
             make_cid_select = st.selectbox("コンテストID", options=["(新規作成)"] + existing_cids, index=1 if len(existing_cids)>0 else 0)
@@ -122,10 +123,22 @@ with st.sidebar.expander("管理者メニュー"):
             else:
                 final_make_cid = make_cid_select
             st.divider()
+            
             in_no = st.number_input("問題番号", value=1)
-            in_q = st.text_area("問題文", height=60)
+            
+            # 問題文入力 (少し高さを広げました)
+            in_q = st.text_area("問題文 (TeX対応: $数式$)", height=100)
+            
+            # ★プレビュー機能の追加
+            st.caption("👇 プレビュー")
+            if in_q:
+                st.info(in_q) # ここで実際の表示を確認できます
+            else:
+                st.text("（ここにプレビューが表示されます）")
+            
             in_a = st.text_input("正解")
             in_p = st.number_input("配点", value=100)
+            
             if st.button("データベースに追加"):
                 if final_make_cid and in_a:
                     ws_prob.append_row([final_make_cid, in_no, in_q, in_a, in_p])
