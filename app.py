@@ -5,45 +5,45 @@ from oauth2client.service_account import ServiceAccountCredentials
 import time
 import json
 
+# --- ページ設定 ---
 st.set_page_config(page_title="Math Contest", layout="wide")
 
-# --- 1. データベース接続（最強の裏技版） ---
+# --- 1. データベース接続（標準版） ---
 @st.cache_resource
 def get_connection():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    try:
-        # パターンA: Streamlit Cloud (丸ごと貼り付け版)
-        if "gcp_json" in st.secrets:
-            # 文字列として読み込んで、ここでJSONに戻す（これが一番確実）
-            key_dict = json.loads(st.secrets["gcp_json"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(key_dict, scope)
-        
-        # パターンB: 従来のSecrets書き方（念のため残す）
-        elif "gcp_service_account" in st.secrets:
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), scope)
-            
-        # パターンC: ローカルファイル
-        else:
+    # Secretsから認証情報を読み込む（標準的なTOML形式）
+    if "gcp_service_account" in st.secrets:
+        # 辞書型に変換して渡す
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    else:
+        # ローカル/Colab用のフォールバック
+        try:
             creds = ServiceAccountCredentials.from_json_keyfile_name('secrets.json', scope)
+        except:
+            return None, None
 
-        client = gspread.authorize(creds)
-        sh = client.open("omc_db")
-        return sh.sheet1, sh.worksheet("problems")
-
-    except Exception as e:
-        # 具体的なエラーを表示する（デバッグ用）
-        st.error(f"💣 接続エラー発生: {e}")
-        return None, None
+    client = gspread.authorize(creds)
+    sh = client.open("omc_db")
+    
+    # problemsシートがなければ作る、あれば読み込む
+    try:
+        ws_prob = sh.worksheet("problems")
+    except:
+        ws_prob = sh.add_worksheet(title="problems", rows="100", cols="20")
+        
+    return sh.sheet1, ws_prob
 
 # タイトル
 st.title("🏆 リアルタイム数学コンテスト")
 
-# 接続実行
 sheet_rank, sheet_prob = get_connection()
 
 if sheet_rank is None:
-    st.error("設定を確認してください。Secretsに `gcp_json` はありますか？")
+    st.error("🚨 接続エラー: Secretsの設定を確認してください。")
+    st.info("ヒント: Streamlit CloudのSecretsには [gcp_service_account] 形式で保存してください。")
     st.stop()
 
 # --- 2. 設定読み込み ---
@@ -66,13 +66,13 @@ try:
 except:
     current_problems = pd.DataFrame()
 
-# --- 3. ログインと表示 ---
+# --- 3. ログイン機能 ---
 user_name = st.sidebar.text_input("ニックネーム", key="login")
 if not user_name:
-    st.info("👈 名前を入力してください")
+    st.warning("👈 左のサイドバーで名前を入力して参加してください。")
     st.stop()
 
-# ユーザー処理
+# ユーザーデータ処理
 df_rank = pd.DataFrame(sheet_rank.get_all_records())
 if not df_rank.empty and user_name in df_rank['user'].values:
     row = df_rank[df_rank['user'] == user_name].iloc[0]
@@ -84,31 +84,27 @@ else:
     solved = []
     st.toast(f"Welcome {user_name}!")
 
-# 画面切り替え
+# --- 4. 画面表示 ---
 if status == "待機中":
-    st.info("⏳ 待機中...")
+    st.info(f"⏳ 第{active_cid}回コンテスト: 待機中...")
     if st.button("更新"): st.rerun()
 
 elif status == "開催中":
-    st.metric(f"Score ({active_cid})", score)
-    if st.button("更新"): st.rerun()
+    c1, c2 = st.columns([3, 1])
+    c1.metric(f"Score (Round {active_cid})", score)
+    if c2.button("更新"): st.rerun()
     
-    col1, col2 = st.columns([2,1])
-    with col1:
+    col_q, col_r = st.columns([2, 1])
+    with col_q:
         if current_problems.empty:
-            st.warning("問題がありません")
+            st.warning("問題データがありません。")
         for i, row in current_problems.iterrows():
             uid = f"{active_cid}_{row['id']}"
             if uid in solved:
-                st.info(f"✅ Q{row['id']} クリア")
+                st.info(f"✅ Q{row['id']} クリア！")
             else:
                 with st.expander(f"Q{row['id']} ({row['pt']}点)"):
                     st.latex(row['q'])
-                    if st.button("送信", key=f"b_{uid}"):
-                        ans = st.text_input("答", key=f"a_{uid}") # 簡略化のためここ注意
-                        # 実際はinputとbuttonを分ける必要がありますが、簡易版として
-                        pass 
-                    # フォーム修正: inputを外に出す
                     ans = st.text_input("回答", key=f"in_{uid}")
                     if st.button("送信", key=f"btn_{uid}"):
                         if str(ans) == str(row['ans']):
@@ -119,10 +115,10 @@ elif status == "開催中":
                             st.rerun()
                         else:
                             st.error("不正解")
-    with col2:
-        st.write("順位表")
+    with col_r:
+        st.write("### 順位表")
         st.dataframe(df_rank[['user', 'score']].sort_values('score', ascending=False), use_container_width=True)
 
 elif status == "終了":
-    st.warning("終了")
+    st.warning("終了しました")
     st.dataframe(df_rank[['user', 'score']].sort_values('score', ascending=False))
