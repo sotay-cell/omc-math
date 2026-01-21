@@ -36,8 +36,8 @@ def get_connection():
         return ws_users, ws_settings, ws_prob
     except Exception as e: return None, None, None
 
-# キャッシュ設定
-@st.cache_data(ttl=4)
+# 監視役のためにキャッシュ時間を短く設定
+@st.cache_data(ttl=4) 
 def fetch_data():
     """データ取得用"""
     ws_users, ws_settings, ws_prob = get_connection()
@@ -56,6 +56,11 @@ if not ws_users:
     st.stop()
 
 st.title("🏆 リアルタイム数学コンテスト Pro")
+
+# 手動更新ボタン（順位表の更新などはこれで行う）
+if st.button("🔄 画面を更新 (順位表・スコア確認)", type="secondary"):
+    fetch_data.clear()
+    st.rerun()
 
 # データ読み込み
 users_list, settings_dict, prob_list = fetch_data()
@@ -76,7 +81,6 @@ with st.sidebar.expander("👮 管理者メニュー"):
     if admin_pass == "admin123":
         tab_c, tab_m, tab_u = st.tabs(["開催", "作問", "生徒"])
         
-        # 開催管理
         with tab_c:
             st.write(f"Status: **{status}**")
             cid_selection = st.selectbox("開催するIDを選択", options=existing_cids + ["(新規入力)"], index=0 if active_cid in existing_cids else len(existing_cids))
@@ -104,38 +108,30 @@ with st.sidebar.expander("👮 管理者メニュー"):
                 if users_len > 0:
                     cell_list = []
                     for r in range(2, users_len + 2):
-                        cell_list.append(gspread.Cell(r, 4, 0))  # score
-                        cell_list.append(gspread.Cell(r, 5, "")) # history
+                        cell_list.append(gspread.Cell(r, 4, 0))
+                        cell_list.append(gspread.Cell(r, 5, ""))
                     ws_users.update_cells(cell_list)
                     fetch_data.clear()
                     st.toast("リセット完了")
 
-        # 問題作成
         with tab_m:
-            st.write("###### どのコンテストの問題を作りますか？")
+            st.write("###### 問題作成")
             make_cid_select = st.selectbox("コンテストID", options=["(新規作成)"] + existing_cids, index=1 if len(existing_cids)>0 else 0)
-            
             if make_cid_select == "(新規作成)":
-                final_make_cid = st.text_input("新しいコンテストIDを入力 (例: B001)")
+                final_make_cid = st.text_input("新しいコンテストIDを入力")
             else:
                 final_make_cid = make_cid_select
-
             st.divider()
-            
             in_no = st.number_input("問題番号", value=1)
-            in_q = st.text_area("問題文 (TeX対応)", height=60, placeholder="例: $x^2 + y^2 = 1$ のとき...")
+            in_q = st.text_area("問題文 (TeX対応)", height=60)
             in_a = st.text_input("正解")
             in_p = st.number_input("配点", value=100)
-            
             if st.button("データベースに追加"):
                 if final_make_cid and in_a:
                     ws_prob.append_row([final_make_cid, in_no, in_q, in_a, in_p])
                     fetch_data.clear()
-                    st.success(f"追加しました！ (ID: {final_make_cid} - No.{in_no})")
-                else:
-                    st.error("IDと正解は必須です")
-        
-        # 生徒登録
+                    st.success(f"追加: {final_make_cid}-{in_no}")
+
         with tab_u:
             new_uid = st.text_input("新規ID")
             new_upass = st.text_input("新規Pass")
@@ -153,7 +149,6 @@ if "logged_in" not in st.session_state:
     st.session_state["my_id"] = ""
     st.session_state["my_name"] = ""
     st.session_state["last_known_status"] = status
-    # WAロック情報の初期化
     if "wa_lock" not in st.session_state:
         st.session_state["wa_lock"] = {}
 
@@ -169,7 +164,6 @@ if not st.session_state["logged_in"]:
         input_id = st.text_input("ユーザーID")
         input_pass = st.text_input("パスワード", type="password")
         submitted = st.form_submit_button("ログイン")
-        
         if submitted:
             fresh_users = ws_users.get_all_records()
             user_found = False
@@ -182,7 +176,6 @@ if not st.session_state["logged_in"]:
                     st.session_state["my_name"] = found_name
                     user_found = True
                     break
-            
             if user_found:
                 st.success(f"ようこそ、{found_name} さん！")
                 time.sleep(0.5)
@@ -193,45 +186,37 @@ if not st.session_state["logged_in"]:
 
 
 # ==========================================
-# ★ここが重要：自動更新 & 監視システム
+# ★ここが改良点：「必要なときだけ」更新する監視役
 # ==========================================
-@st.fragment(run_every=5)
-def auto_monitor_header():
-    # 最新データを取得
-    u_data, s_data, _ = fetch_data()
+@st.fragment(run_every=3) # 3秒おきにチェック（画面更新は条件に合うときだけ）
+def trigger_observer():
+    # 1. データの最新状態をこっそりチェック
+    _, s_data, _ = fetch_data()
     
-    # 1. 開催状態の監視（待機→開始の検知）
-    current_status = s_data.get("status", "待機中")
-    if st.session_state.get("last_known_status") != current_status:
-        st.session_state["last_known_status"] = current_status
-        st.rerun()
+    # --- トリガーA：コンテスト開始 ---
+    # 直前のステータスと違う（待機→開催中など）場合のみリロード
+    new_status = s_data.get("status", "待機中")
+    if st.session_state.get("last_known_status") != new_status:
+        st.session_state["last_known_status"] = new_status
+        st.rerun() # ここでリロード発動！
 
-    # 2. WAロックの解除監視（★ここが「赤い箱」を自動解除する機能です）
-    # 「ロック終了時刻」が「現在時刻」を過ぎているものがあれば、画面をリロードする
+    # --- トリガーB：WAロック解除 ---
+    # ロック中のものがあり、かつ時間が過ぎているものがあるかチェック
     if "wa_lock" in st.session_state and st.session_state["wa_lock"]:
         now = time.time()
-        needs_rerun = False
+        should_reload = False
         for uid, end_time in st.session_state["wa_lock"].items():
-            if end_time < now: # 時間切れのロックを発見！
-                needs_rerun = True
+            if end_time < now: # 時間切れ発見
+                should_reload = True
                 break
-        if needs_rerun:
-            st.rerun() # リロードしてフォームを復活させる
+        
+        if should_reload:
+            st.rerun() # ここでリロード発動！
     
-    # 3. 自分のスコアをリアルタイム表示
-    my_id_chk = st.session_state["my_id"]
-    my_name_chk = st.session_state["my_name"]
-    
-    user_row = next((u for u in u_data if str(u['user_id']) == str(my_id_chk)), None)
-    
-    display_score = 0
-    if user_row:
-        try: display_score = int(user_row.get('score', 0))
-        except: display_score = 0
-    
-    st.metric(f"{my_name_chk} さんの現在のスコア", f"{display_score} 点")
+    # ※ 条件に合わなければ何もしない（画面はチラつかない）
 
-auto_monitor_header()
+# 監視役を配置（画面には何も表示しません）
+trigger_observer()
 
 
 # ==========================================
@@ -252,12 +237,11 @@ if not df_users.empty and 'user_id' in df_users.columns:
         raw_score = my_row.iloc[0]['score']
         try: my_score = int(raw_score)
         except: my_score = 0
-        
         raw_hist = my_row.iloc[0]['history']
         if pd.isna(raw_hist) or raw_hist == "": my_solved = []
         else: my_solved = str(raw_hist).split(',')
     else:
-        st.error("データエラー: ユーザーが見つかりません")
+        st.error("データエラー")
         st.stop()
 
 # タイマー
@@ -280,7 +264,7 @@ if not df_prob.empty and 'contest_id' in df_prob.columns:
 else:
     current_problems = pd.DataFrame()
 
-# 正解者数
+# 正解者数集計
 solver_counts = {}
 if 'history' in df_users.columns:
     for h in df_users['history']:
@@ -288,12 +272,10 @@ if 'history' in df_users.columns:
         for i in str(h).split(','): 
             if i: solver_counts[i] = solver_counts.get(i, 0) + 1
 
-# ランキング表示関数
-@st.fragment(run_every=10)
+# 順位表表示
 def show_ranking():
     st.write("### 🏆 Standings")
-    u, _, _ = fetch_data()
-    df = pd.DataFrame(u)
+    df = pd.DataFrame(users_list) # 手動更新時のデータを使用
     if not df.empty:
         df['score'] = pd.to_numeric(df['score'], errors='coerce').fillna(0)
         if 'name' in df.columns:
@@ -319,7 +301,8 @@ if status == "開催中":
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        # WAロック辞書の初期化確認
+        st.metric(f"{st.session_state['my_name']} さんのスコア", f"{my_score} 点")
+
         if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
         
         for i, row in current_problems.iterrows():
@@ -331,14 +314,15 @@ if status == "開催中":
                 st.success(f"✅ Q{pid} クリア")
             else:
                 lock = st.session_state["wa_lock"].get(uid, 0) - time.time()
+                
                 with st.expander(f"Q{pid} ({row['pt']}点) - 正解{solvers}人"):
                     st.markdown(row['q'])
                     if not is_time_up:
                         if lock > 0:
-                            st.error(f"❌ WA: あと{int(lock)}秒")
+                            # ロック中
+                            st.error(f"❌ WA: あと{int(lock)}秒 (解除されると自動で入力欄が出ます)")
                         else:
-                            # ★ここも修正：ロック時間が過ぎていたら、ロック情報を完全に削除する
-                            # (そうしないと、無限にリロードされ続けるため)
+                            # ロック解除処理
                             if uid in st.session_state["wa_lock"]:
                                 st.session_state["wa_lock"].pop(uid, None)
 
@@ -367,7 +351,6 @@ if status == "開催中":
                                         st.error(f"通信エラー詳細: {e}")
                                 else:
                                     st.error("不正解")
-                                    # ここでロック時間をセット
                                     st.session_state["wa_lock"][uid] = time.time() + 10
                                     st.rerun()
     with col_rank:
