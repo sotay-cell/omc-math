@@ -182,3 +182,34 @@ elif status == "開催中":
                     if is_time_up: st.write("🚫 終了")
                     elif lock_rem > 0: st.error(f"❌ WA: あと{int(lock_rem)}秒")
                     else:
+                        ans = st.text_input("回答", key=f"in_{uid}")
+                        if st.button("送信", key=f"btn_{uid}"):
+                            if str(ans).strip() == str(row['ans']):
+                                st.balloons()
+                                try:
+                                    cell = sheet_rank.find(user_name)
+                                    cur_s = int(sheet_rank.cell(cell.row, 2).value)
+                                    cur_h = sheet_rank.cell(cell.row, 3).value
+                                    new_h = (cur_h + "," + uid) if cur_h else uid
+                                    sheet_rank.update_cell(cell.row, 2, cur_s + row['pt'])
+                                    sheet_rank.update_cell(cell.row, 3, new_h)
+                                    st.rerun()
+                                except: st.error("通信エラー")
+                            else:
+                                st.error("不正解...")
+                                st.session_state["wa_lock"][uid] = time.time() + 10
+                                st.rerun()
+
+    with col_r:
+        st.write("### 順位表")
+        if not df_rank.empty:
+            v_df = df_rank[['user', 'score']].sort_values('score', ascending=False).reset_index(drop=True)
+            v_df.index += 1
+            st.dataframe(v_df, use_container_width=True)
+
+elif status == "終了":
+    st.warning("終了")
+    if not df_rank.empty:
+        v_df = df_rank[['user', 'score']].sort_values('score', ascending=False).reset_index(drop=True)
+        v_df.index += 1
+        st.dataframe(v_df)
