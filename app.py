@@ -250,7 +250,6 @@ if not df_users.empty and 'user_id' in df_users.columns:
         else: my_solved = str(raw_hist).split(',')
     else:
         st.error("データエラー: ユーザーが見つかりません")
-        # ユーザーが消された場合などの安全策
         st.stop()
 
 # タイマー
@@ -312,8 +311,6 @@ if status == "開催中":
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        # 古いスコア表示は auto_monitor_header に任せたので削除
-        
         if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
         
         for i, row in current_problems.iterrows():
@@ -332,23 +329,37 @@ if status == "開催中":
                             st.error(f"❌ WA: あと{int(lock)}秒")
                         else:
                             ans = st.text_input("回答", key=f"ans_{uid}")
+                            
+                            # ★通信量削減のために改良した回答ボタン
                             if st.button("送信", key=f"btn_{uid}"):
                                 if str(ans).strip() == str(row['ans']):
                                     try:
-                                        cell = ws_users.find(my_id)
-                                        try: cur_s = int(ws_users.cell(cell.row, 4).value)
-                                        except: cur_s = 0
-                                        cur_h = ws_users.cell(cell.row, 5).value
-                                        new_h = (cur_h + "," + uid) if cur_h else uid
+                                        # 1. API通信をせず、手元のデータで新しいスコアを計算
+                                        new_score = my_score + row['pt']
                                         
-                                        ws_users.update_cell(cell.row, 4, cur_s + row['pt'])
-                                        ws_users.update_cell(cell.row, 5, new_h)
+                                        # 履歴の更新用文字列を作成
+                                        if uid not in my_solved:
+                                            new_solved_list = my_solved + [uid]
+                                        else:
+                                            new_solved_list = my_solved
+                                        new_history_str = ",".join(new_solved_list)
+
+                                        # 2. 書き込み場所を探す(API通信:1回目)
+                                        cell = ws_users.find(my_id, in_column=1)
                                         
+                                        # 3. 点数(D列)と履歴(E列)を一度に書き込む(API通信:2回目)
+                                        # update記法: range="D行:E行", values=[[点数, 履歴]]
+                                        ws_users.update(f"D{cell.row}:E{cell.row}", [[new_score, new_history_str]])
+                                        
+                                        # キャッシュクリアとリロード
                                         fetch_data.clear()
-                                        st.toast("正解！")
+                                        st.toast(f"🎉 正解！ +{row['pt']}点")
                                         time.sleep(0.5)
                                         st.rerun()
-                                    except: st.error("通信エラー")
+
+                                    except Exception as e:
+                                        # 詳細なエラーを表示
+                                        st.error(f"通信エラー詳細: {e}")
                                 else:
                                     st.error("不正解")
                                     st.session_state["wa_lock"][uid] = time.time() + 10
