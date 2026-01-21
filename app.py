@@ -127,7 +127,7 @@ with st.sidebar.expander("管理者メニュー"):
             in_no = st.number_input("問題番号", value=1)
             
             # 問題文入力
-            in_q = st.text_area("問題文 (TeX対応: $数式$)", height=100)
+            in_q = st.text_area("問題文", height=100)
             
             # ★プレビュー（色なし通常のMarkdown表示）
             st.caption("👇 プレビュー")
@@ -174,7 +174,7 @@ if not st.session_state["logged_in"]:
     st.markdown("##### ログイン")
     with st.form("login_form"):
         input_id = st.text_input("User ID")
-        input_pass = st.text_input("パスワード", type="password")
+        input_pass = st.text_input("Password", type="password")
         submitted = st.form_submit_button("ログイン")
         if submitted:
             fresh_users = ws_users.get_all_records()
