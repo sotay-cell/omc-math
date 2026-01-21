@@ -316,7 +316,7 @@ if status == "開催中":
             solvers = solver_counts.get(uid, 0)
             
             if uid in my_solved:
-                st.success(f"✅ 問題 {pid} クリア")
+                st.success(f"問題 {pid}")
             else:
                 with st.expander(f"問題 {pid} ({row['pt']}) - 正解 {solvers}人"):
                     st.markdown(row['q'])
