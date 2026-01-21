@@ -20,6 +20,7 @@ def get_connection():
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         else:
             creds = ServiceAccountCredentials.from_json_keyfile_name('secrets.json', scope)
+        
         client = gspread.authorize(creds)
         sh = client.open("omc_db")
         
@@ -35,16 +36,17 @@ def get_connection():
         return ws_users, ws_settings, ws_prob
     except Exception as e: return None, None, None
 
-@st.cache_data(ttl=5)
+# キャッシュを4秒に設定（5秒の自動更新より少し短くして、常に新しいデータを拾えるようにする）
+@st.cache_data(ttl=4)
 def fetch_data():
-    """データ取得用（5秒キャッシュ）"""
+    """データ取得用"""
     ws_users, ws_settings, ws_prob = get_connection()
     if not ws_users: return [], {}, []
     
     users = ws_users.get_all_records()
     settings_raw = ws_settings.get_all_values()
     settings = {row[0]: row[1] for row in settings_raw if len(row) >= 2}
-    prob_data = ws_prob.get_all_records() # 問題データも取得してIDリストを作る
+    prob_data = ws_prob.get_all_records()
     return users, settings, prob_data
 
 # --- メイン処理開始 ---
@@ -65,10 +67,9 @@ status = settings_dict.get("status", "待機中")
 active_cid = settings_dict.get("contest_id", "A001")
 end_time_str = settings_dict.get("end_time", "")
 
-# 既存のコンテストIDリストを作成（重複なし）
 existing_cids = sorted(list(set([str(p['contest_id']) for p in prob_list if 'contest_id' in p])))
 if active_cid not in existing_cids:
-    existing_cids.append(active_cid) # 現在の設定IDも含める
+    existing_cids.append(active_cid)
 
 with st.sidebar.expander("👮 管理者メニュー"):
     admin_pass = st.text_input("Admin Pass", type="password")
@@ -78,7 +79,6 @@ with st.sidebar.expander("👮 管理者メニュー"):
         # 開催管理
         with tab_c:
             st.write(f"Status: **{status}**")
-            # 既存IDから選択、または手入力
             cid_selection = st.selectbox("開催するIDを選択", options=existing_cids + ["(新規入力)"], index=0 if active_cid in existing_cids else len(existing_cids))
             
             if cid_selection == "(新規入力)":
@@ -110,10 +110,9 @@ with st.sidebar.expander("👮 管理者メニュー"):
                     fetch_data.clear()
                     st.toast("リセット完了")
 
-        # 問題作成（ここを改良！）
+        # 問題作成
         with tab_m:
             st.write("###### どのコンテストの問題を作りますか？")
-            # プルダウンでIDを選択
             make_cid_select = st.selectbox("コンテストID", options=["(新規作成)"] + existing_cids, index=1 if len(existing_cids)>0 else 0)
             
             if make_cid_select == "(新規作成)":
@@ -131,7 +130,7 @@ with st.sidebar.expander("👮 管理者メニュー"):
             if st.button("データベースに追加"):
                 if final_make_cid and in_a:
                     ws_prob.append_row([final_make_cid, in_no, in_q, in_a, in_p])
-                    fetch_data.clear() # キャッシュ更新
+                    fetch_data.clear()
                     st.success(f"追加しました！ (ID: {final_make_cid} - No.{in_no})")
                 else:
                     st.error("IDと正解は必須です")
@@ -153,6 +152,8 @@ if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["my_id"] = ""
     st.session_state["my_name"] = ""
+    # ★追加：ステータス変化検知用
+    st.session_state["last_known_status"] = status
 
 if st.session_state["logged_in"]:
     st.sidebar.markdown(f"👤 **{st.session_state['my_name']}** さん")
@@ -188,13 +189,49 @@ if not st.session_state["logged_in"]:
                 st.error("IDまたはパスワードが違います")
     st.stop()
 
+
+# ==========================================
+# ★ここが重要：自動更新 & 監視システム
+# ==========================================
+# 5秒おきにここだけ実行して、状態変化やスコア更新をチェック
+@st.fragment(run_every=5)
+def auto_monitor_header():
+    # 最新データを取得
+    u_data, s_data, _ = fetch_data()
+    
+    # 1. 開催状態の監視（待機→開始の検知）
+    current_status = s_data.get("status", "待機中")
+    
+    # 前回の状態と違っていたら（例: 待機中 -> 開催中）、画面全体をリロード
+    if st.session_state.get("last_known_status") != current_status:
+        st.session_state["last_known_status"] = current_status
+        st.rerun()
+    
+    # 2. 自分のスコアをリアルタイム表示
+    my_id_chk = st.session_state["my_id"]
+    my_name_chk = st.session_state["my_name"]
+    
+    # ユーザーデータから自分を探す
+    user_row = next((u for u in u_data if str(u['user_id']) == str(my_id_chk)), None)
+    
+    display_score = 0
+    if user_row:
+        try: display_score = int(user_row.get('score', 0))
+        except: display_score = 0
+    
+    # ヘッダーとして表示（これが5秒おきに点滅せずに更新される）
+    st.metric(f"{my_name_chk} さんの現在のスコア", f"{display_score} 点")
+
+# ★この関数を配置（ログイン後のみ表示）
+auto_monitor_header()
+
+
 # ==========================================
 # 🎮 メイン画面
 # ==========================================
 my_id = st.session_state["my_id"]
-my_name = st.session_state["my_name"]
 df_users = pd.DataFrame(users_list)
-df_prob = pd.DataFrame(prob_list) # フェッチ済みのデータを使用
+df_prob = pd.DataFrame(prob_list) 
 
 my_score = 0
 my_solved = []
@@ -212,7 +249,8 @@ if not df_users.empty and 'user_id' in df_users.columns:
         if pd.isna(raw_hist) or raw_hist == "": my_solved = []
         else: my_solved = str(raw_hist).split(',')
     else:
-        st.error("データエラー")
+        st.error("データエラー: ユーザーが見つかりません")
+        # ユーザーが消された場合などの安全策
         st.stop()
 
 # タイマー
@@ -243,7 +281,8 @@ if 'history' in df_users.columns:
         for i in str(h).split(','): 
             if i: solver_counts[i] = solver_counts.get(i, 0) + 1
 
-@st.fragment(run_every=5)
+# ランキング表示関数
+@st.fragment(run_every=10) # ランキングは少し遅くてもいいので10秒間隔で負荷軽減
 def show_ranking():
     st.write("### 🏆 Standings")
     u, _, _ = fetch_data() # 最新データを再取得
@@ -259,20 +298,21 @@ def show_ranking():
         view.index += 1
         st.dataframe(view, use_container_width=True)
 
+# 画面表示分け
 if status == "開催中":
     st.info(f"🔥 {active_cid} 開催中 | {remaining_msg}")
 elif status == "待機中":
-    st.info("⏳ 待機中...")
+    st.info("⏳ 待機中... (開始されると自動で切り替わります)")
     show_ranking()
 
+# 開催中のメイン処理
 if status == "開催中":
     if is_time_up: st.error("⏰ 終了")
     
     col_main, col_rank = st.columns([2, 1])
     
     with col_main:
-        st.metric(f"{my_name} さんのスコア", my_score)
-        if st.button("手動更新"): st.rerun()
+        # 古いスコア表示は auto_monitor_header に任せたので削除
         
         if "wa_lock" not in st.session_state: st.session_state["wa_lock"] = {}
         
