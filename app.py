@@ -257,7 +257,7 @@ if status == "開催中" and end_time_str:
         diff = end_dt - datetime.datetime.now(JST)
         if diff.total_seconds() > 0:
             mm, ss = divmod(int(diff.total_seconds()), 60)
-            remaining_msg = f"残り {mm}分"
+            remaining_msg = f"残り {mm} 分"
         else:
             remaining_msg, is_time_up = "コンテストは終了しました", True
             # セッションステートも更新しておく（整合性のため）
